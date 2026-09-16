@@ -8,13 +8,17 @@ ARG AMDGPU_TARGET="gfx1201"
 SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_PATH=/opt/rocm
+ENV PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git cmake ninja-build build-essential ca-certificates libnuma-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-# Clone latest upstream master with full depth so merge bases resolve cleanly
+# Clone latest upstream master
 RUN git clone --depth 500 https://github.com/ggml-org/llama.cpp.git llama.cpp
 WORKDIR /workspace/llama.cpp
 
@@ -24,11 +28,9 @@ RUN git config user.email "bot@ci.local" && git config user.name "CI Builder"
 RUN if [ -n "$PRS_TO_MERGE" ]; then \
       for pr in $(echo "$PRS_TO_MERGE" | tr ',' ' '); do \
         echo "==> Fetching and merging upstream PR #${pr}..."; \
-        # Try fetching GitHub's pre-merged ref first \
         if git fetch origin pull/${pr}/merge:pr-${pr}-merged; then \
           git merge --no-edit -X ours pr-${pr}-merged; \
         else \
-          # Fallback to fetching head ref and applying with automatic conflict resolution \
           git fetch origin pull/${pr}/head:pr-${pr}-head && \
           git merge --no-edit -X ours pr-${pr}-head || \
           (curl -fsSL https://github.com/ggml-org/llama.cpp/pull/${pr}.patch | git apply --3way || true); \
@@ -46,8 +48,9 @@ RUN if [ -n "$EXTRA_REMOTES" ]; then \
       git cherry-pick --strategy-option=theirs extra/"${REPO_BRANCH}" || true; \
     fi
 
-# Compile static binary for target GPU
-RUN cmake -B build -G Ninja \
+# Explicitly use AMD hipcc/clang++ as the compiler and cap concurrency to -j 2 for GitHub runners
+RUN CXX=/opt/rocm/llvm/bin/clang++ CC=/opt/rocm/llvm/bin/clang \
+    cmake -B build -G Ninja \
         -DGGML_HIP=ON \
         -DAMDGPU_TARGETS="${AMDGPU_TARGET}" \
         -DGGML_HIP_ROCWMMA_FATTN=ON \
@@ -55,7 +58,7 @@ RUN cmake -B build -G Ninja \
         -DLLAMA_BUILD_TESTS=OFF \
         -DGGML_BUILD_TESTS=OFF \
         -DCMAKE_BUILD_TYPE=Release && \
-    cmake --build build --config Release --target llama-server -j$(nproc)
+    cmake --build build --config Release --target llama-server -j 2
 
 # Stage 2: Runtime image
 FROM rocm/dev-ubuntu-24.04:latest
