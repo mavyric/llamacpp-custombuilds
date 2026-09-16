@@ -1,0 +1,69 @@
+name: Build Custom ROCm Llama-Swap Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      prs_to_merge:
+        description: "Upstream PR numbers to merge (comma-separated)"
+        required: false
+        default: "27861"
+      extra_remotes:
+        description: "External git repo to cherry-pick (format: URL@branch)"
+        required: false
+        default: "https://github.com/stew675/llama.git@rdna-boosts"
+      amdgpu_target:
+        description: "ROCm GPU Target Architecture"
+        required: true
+        default: "gfx1201"
+      image_tag:
+        description: "Docker Image Tag"
+        required: true
+        default: "rdna4-moe"
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Builder Repo
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space on GitHub Runner
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase Repository Owner
+        id: repo_owner
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ steps.repo_owner.outputs.owner }}/llama-swap:${{ github.event.inputs.image_tag }}
+          build-args: |
+            PRS_TO_MERGE=${{ github.event.inputs.prs_to_merge }}
+            EXTRA_REMOTES=${{ github.event.inputs.extra_remotes }}
+            AMDGPU_TARGET=${{ github.event.inputs.amdgpu_target }}
